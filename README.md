@@ -416,3 +416,184 @@ base64 -w 0 /root/ping77_sample.pcap
 | RTT max | 1.226 ms |
 
 Latensi rendah dan konsisten (rentang RTT hanya ~0.85 ms antara min-max) menunjukkan koneksi Knights–Chisa stabil tanpa indikasi congestion, meski dikirim 77 paket beruntun dengan payload 128 bytes dan interval ketat 0.3 detik.
+
+
+11. Eiri membuktikan kelemahan protokol Telnet dengan membuat akun `phantom_user` (password `wired_ghost`) pada layanan `telnetd` di node Chisa, lalu login Telnet dari node Eiri ke Chisa sambil menangkap sesi di Wireshark. Tunjukkan kredensial plain-text lewat *Follow TCP Stream*, dan jelaskan mengapa tiap karakter terkirim dalam paket TCP terpisah.
+
+Live capture dijalankan di GNS3 pada link **Switch2 Ethernet1 ↔ Chisa eth0**, lalu login Telnet dilakukan dari node Eiri (`10.86.3.3`) ke Chisa (`10.86.2.2`):
+
+```sh
+telnet 10.86.2.2
+# login: phantom_user
+# Password: wired_ghost
+```
+
+![](assets/telnet-live-capture-terminal.png)
+
+Filter Wireshark `telnet`, klik kanan salah satu paket → **Follow → TCP Stream**. Username `phantom_user` dan password `wired_ghost` terbaca utuh dalam plain-text, masing-masing karakter username tampil pada baris terpisah:
+
+![](assets/telnet-followstream-login-part1.png)
+
+Lanjutan stream menunjukkan perintah `whoami` (membalas `phantom_user`) dan `exit`, juga terkirim karakter per karakter:
+
+![](assets/telnet-followstream-login-part2.png)
+
+Daftar paket di Wireshark (filter `telnet`) mengonfirmasi setiap keystroke terkirim sebagai paket TCP tersendiri berukuran **1 byte data**, bergantian antara Chisa (`10.86.2.2`) dan Eiri (`10.86.3.3`):
+
+![](assets/telnet-wireshark-1byte-packets.png)
+
+**Kredensial yang terbukti plain-text:** username `phantom_user`, password `wired_ghost`.
+
+**Penjelasan mengapa tiap karakter terkirim dalam paket TCP terpisah:** Telnet secara default berjalan dalam mode *character-at-a-time* dengan *remote echo* — begitu satu tombol ditekan di client, karakter tersebut langsung dikirim sebagai satu paket TCP (terlihat di Wireshark sebagai "1 byte data"), dan server-lah yang bertugas meng-echo-kan karakter tersebut kembali ke layar client. Karena tidak ada buffering di sisi client, jumlah paket yang tertangkap sama persis dengan jumlah karakter yang diketik (termasuk saat mengetik username, password, maupun perintah `whoami`/`exit`), alih-alih terkirim sekaligus dalam satu paket berisi seluruh string.
+
+> **Catatan validasi:** hasil capture sudah konsisten dan solid, filter `telnet` + Follow TCP Stream + kolom Length Info "1 byte data" adalah tiga bukti yang saling menguatkan satu sama lain untuk soal ini. Tidak ada yang perlu dikoreksi.
+
+12. Alice mencurigai Knights menjalankan layanan rahasia. Lakukan pemindaian port dari Alice ke Knights menggunakan Netcat untuk memeriksa port 22 (SSH) dan 80 (HTTP) yang terbuka, serta port rahasia 7777 yang tertutup. Analisis perbedaan TCP flag antara port terbuka (SYN-ACK) dan port tertutup (RST-ACK) di Wireshark.
+
+Live capture di GNS3 pada link **Switch3 Ethernet1 ↔ Knights eth0**, filter `tcp.port in (22, 80, 7777)`, lalu pemindaian dari node **Alice** (`10.86.1.2`) ke **Knights** (`10.86.3.2`):
+
+```sh
+nc -zv 10.86.3.2 22
+nc -zv 10.86.3.2 80
+nc -zv 10.86.3.2 7777
+```
+
+![](assets/portscan-tcp-overview.png)
+
+**Hasil pemindaian:**
+- **Port 22 (SSH)**: `SYN → SYN, ACK → ACK → FIN, ACK` (*three-way handshake* penuh), Knights bahkan sempat mengirim banner `SSH-2.0-OpenSSH_10.2` sebelum ditutup — port terbuka dan aktif menjalankan SSH.
+- **Port 80 (HTTP)**: pola identik, `SYN → SYN, ACK → ACK → FIN, ACK` — port terbuka.
+- **Port 7777**: Alice mengirim `SYN`, Knights langsung membalas `RST, ACK` tanpa handshake lanjutan — port tertutup.
+
+Detail flag paket `SYN, ACK` (port 22 terbuka):
+
+![](assets/portscan-synack-detail.png)
+
+Detail flag paket `RST, ACK` (port 7777 tertutup) — bit *Reset* dan *Acknowledgment* keduanya set:
+
+![](assets/portscan-rstack-detail.png)
+
+> **Catatan validasi:** hasil capture membuktikan persis seperti yang diprediksi secara teori: port terbuka membalas `SYN, ACK` lalu koneksi diselesaikan dengan `FIN, ACK`, sedangkan port tertutup langsung dijawab `RST, ACK` sekali tembak tanpa handshake. Layanan rahasia di port 7777 yang dicurigai Alice terbukti **tidak terbuka/tidak listening** saat pemindaian ini dilakukan. Metode dan filter yang dipakai sudah tepat, tidak ada koreksi.
+
+13. Lain memerintahkan agar administrasi jarak jauh ke Knights memakai SSH tanpa password. Pasang OpenSSH server di Knights, buat pasangan kunci SSH di Mika untuk user `mika_admin`, konfigurasikan public key authentication (`PasswordAuthentication no`), lalu tangkap sesi koneksinya di Wireshark dan jelaskan mengapa kredensial tidak terlihat plain-text seperti pada Telnet.
+
+Konfigurasi akun & kunci (Knights & Mika):
+
+```sh
+# di Knights
+adduser -D -s /bin/sh mika_admin
+echo "mika_admin:admin123" | chpasswd
+sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+killall sshd && /usr/sbin/sshd
+
+# di Mika
+ssh-keygen -t rsa -b 2048
+ssh-copy-id -o StrictHostKeyChecking=no mika_admin@10.86.3.2
+
+# kembali di Knights, kunci akses password
+sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+killall sshd && /usr/sbin/sshd
+```
+
+Bukti `ssh-copy-id` berhasil dan login berikutnya langsung masuk tanpa diminta password (public key authentication aktif):
+
+![](assets/ssh-copyid-passwordless-login.png)
+
+Live capture di GNS3 pada link **Switch1 Ethernet2 ↔ Mika eth0**, filter `ssh`. Sesi kedua (paket No. 111 dst.) menangkap handshake penuh dari awal:
+
+![](assets/ssh-handshake-kex-detail.png)
+
+**Urutan handshake yang teridentifikasi:**
+- **Protocol Version Exchange**: `SSH-2.0-OpenSSH_10.2` (client & server)
+- **Key Exchange Init**: `SSH_MSG_KEXINIT` (client & server)
+- **Key Exchange**: `PQ/T Hybrid Key Exchange Init` (client) → `PQ/T Hybrid Key Exchange Reply, New Keys, Encrypted packet` (server)
+- **New Keys**: `New Keys, Encrypted packet` (client)
+- Seluruh paket setelahnya berubah menjadi `Encrypted packet` hingga sesi selesai.
+
+Seluruh sesi setelah handshake (termasuk otentikasi dan interaksi shell) tercatat sebagai `Encrypted packet` berukuran seragam ~102 byte:
+
+![](assets/ssh-encrypted-session-mika.png)
+
+**Penjelasan mengapa kredensial tidak terlihat plain-text:** setelah pertukaran kunci selesai, Mika dan Knights sama-sama memperoleh *session key* yang identik tanpa pernah mengirim kunci itu sendiri secara langsung di jaringan. Seluruh komunikasi setelah titik ini (autentikasi public key maupun sesi shell) dibungkus sebagai `Encrypted packet`, sehingga meski disadap dengan Wireshark, isinya tidak bisa dibaca — berbeda total dengan Telnet yang mengirim setiap karakter (termasuk password) dalam bentuk plain-text.
+
+> **Catatan validasi:** hasilnya benar dan lengkap, tapi ada satu detail yang meleset dari instruksi awal Gemini: mekanisme key exchange yang tertangkap di capture ini bukan `SSH_MSG_KEXDH_INIT`/`REPLY` (Diffie-Hellman klasik) seperti disebutkan sebelumnya, melainkan **`PQ/T Hybrid Key Exchange`** — algoritma *post-quantum hybrid* (gabungan Diffie-Hellman klasik dengan algoritma tahan-kuantum, umumnya `mlkem768x25519-sha256`) yang menjadi default di OpenSSH versi modern seperti `OpenSSH_10.2` yang dipakai node ini. Sebaiknya di laporan disebutkan nama paket yang **benar-benar muncul di capture** (`PQ/T Hybrid Key Exchange Init/Reply`), bukan istilah `KEXDH` lama, supaya sesuai dengan bukti screenshot.
+
+14. Eiri melancarkan serangan brute-force terhadap form login web Alice. Analisis file capture `wired_bruteforce.pcapng` untuk mengidentifikasi attacker IP, target IP & port, password `lain_admin` yang berhasil ditembus, serta web server software & versinya. Validasi temuan ke socket server port `3401`.
+
+Buka file di Wireshark, filter POST request:
+
+```
+http.request.method == "POST"
+```
+
+Terlihat ratusan percobaan POST ke `/login.php` dari IP yang sama:
+
+![](assets/bruteforce-post-requests.png)
+
+Diperluas dengan filter `http.request.method == "POST" || http.response`, ditemukan pola: hampir seluruh respons adalah `401 Unauthorized` (234 bytes), kecuali **paket No. 57** yang justru berupa `POST` baru — anomali ini menuntun ke satu respons `200 OK` (203 bytes, berbeda dari pola 401 di sekitarnya) sebagai penanda login berhasil:
+
+![](assets/bruteforce-401-vs-200-anomaly.png)
+
+Klik kanan paket respons sukses → **Follow → HTTP Stream** (Stream #59):
+
+![](assets/bruteforce-httpstream-credentials.png)
+
+**Data hasil temuan:**
+
+| Item | Nilai |
+| --- | --- |
+| Attacker IP | `172.26.7.50` |
+| Target IP & Port | `172.26.7.100:8080` |
+| Valid Username | `lain_admin` |
+| Valid Password | `wired_pr0tocol_7` |
+| Tool / User-Agent | `Fuzz Faster U Fool v2.1.0-dev` (ffuf) |
+| Web Server Software & Version | `Apache/2.4.62` |
+| Info tambahan | `X-Powered-By: PHP/8.3.14`, respons sukses `<h1>Success! Login successful.</h1>` |
+
+Validasi ke socket server dari node **Lain** di GNS3:
+
+```sh
+nc 10.4.89.247 3401
+```
+
+Jawaban dimasukkan sesuai urutan pertanyaan (attacker IP → target IP:port → password → web server software) hingga keluar flag:
+
+![](assets/bruteforce-flag-port3401.png)
+
+```
+KOMJAR26{W1r3d_Brut3_cGduWZkXcbkOzOccwhMLtAkFr}
+```
+
+> **Catatan validasi:** sudah tuntas dan cocok 100% dengan hasil analisis Wireshark — attacker IP, target, password, dan versi web server yang dimasukkan ke socket semuanya sama persis dengan yang terbaca di HTTP Stream #59, dan server memang mengonfirmasi dengan mengeluarkan flag. Tidak ada yang perlu dikoreksi.
+
+15. Eiri memasang perangkat keyboard USB berbahaya di node Alice. Buka file `wired_usb_hid.pcap`, identifikasi Vendor ID & Product ID perangkat USB dari deskriptornya, alamat nomor device USB, serta pesan rahasia yang berhasil dicuri dari keystroke. Validasi temuan ke socket server port `3402`.
+
+> **Belum dieksekusi** — soal ini masih tahap perencanaan metode (belum ada capture/hasil nyata). Berikut kerangka langkah yang siap dipakai:
+
+Ekstraksi payload HID interrupt data (`usb.capdata` atau `usbhid.data`) memakai `tshark`:
+
+```sh
+tshark -r wired_usb_hid.pcap -Y "usb.capdata || usbhid.data" -T fields -e usb.capdata -e usbhid.data > keystrokes.txt
+```
+
+Byte ke-0 (status modifier/Shift) dan byte ke-2 (HID keycode) tiap baris dipetakan lewat skrip Python parser untuk merekonstruksi pesan lengkap yang diketik korban.
+
+_(Isi bagian ini dengan: Vendor ID & Product ID dari USB Device Descriptor — cek paket `GET DESCRIPTOR Response DEVICE` di Wireshark filter `usb.idVendor` / `usb.idProduct` —, alamat nomor device USB dari kolom `usb.device_address`, serta teks pesan hasil dekode keystroke.)_
+
+![](assets/usbhid-descriptor-vendorid-productid.png)
+
+![](assets/usbhid-decoded-keystroke-output.png)
+
+Koneksi validasi ke socket server:
+
+```sh
+nc 10.4.89.247 3402
+# atau: ncat 10.4.89.247 3402
+```
+
+![](assets/usbhid-validasi-port3402.png)
+
+_(Isi bagian ini dengan flag yang keluar setelah Vendor ID, Product ID, device address, dan pesan hasil dekode dimasukkan.)_
+
+> **Catatan validasi:** pendekatan ekstraksi `tshark` + parsing keycode benar secara prinsip untuk USB boot-protocol keyboard standar. Sebelum dijalankan, cek dulu di Wireshark: (1) field mana yang benar-benar terisi, `usb.capdata` atau `usbhid.data`; (2) mapping keycode di skrip mencakup semua tombol yang dipakai di pesan rahasia (kalau ada Tab/Esc/tanda baca di luar tabel, karakternya bisa diam-diam terlewat); (3) Vendor ID/Product ID/device address **tidak** ada di payload keystroke — harus dicari terpisah di paket USB Descriptor (biasanya di awal capture saat device pertama kali di-enumerate) dengan filter `usb.idVendor`, `usb.idProduct`, dan `usb.device_address`.
