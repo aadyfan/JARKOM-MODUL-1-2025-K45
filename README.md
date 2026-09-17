@@ -597,3 +597,95 @@ nc 10.4.89.247 3402
 _(Isi bagian ini dengan flag yang keluar setelah Vendor ID, Product ID, device address, dan pesan hasil dekode dimasukkan.)_
 
 > **Catatan validasi:** pendekatan ekstraksi `tshark` + parsing keycode benar secara prinsip untuk USB boot-protocol keyboard standar. Sebelum dijalankan, cek dulu di Wireshark: (1) field mana yang benar-benar terisi, `usb.capdata` atau `usbhid.data`; (2) mapping keycode di skrip mencakup semua tombol yang dipakai di pesan rahasia (kalau ada Tab/Esc/tanda baca di luar tabel, karakternya bisa diam-diam terlewat); (3) Vendor ID/Product ID/device address **tidak** ada di payload keystroke — harus dicari terpisah di paket USB Descriptor (biasanya di awal capture saat device pertama kali di-enumerate) dengan filter `usb.idVendor`, `usb.idProduct`, dan `usb.device_address`.
+
+16. Eiri meninggalkan jejak pada FTP Server Chisa dengan menanamkan file malware yang kemudian diunduh oleh pihak lain menggunakan akun knights_agent. Analisis file capture untuk mengidentifikasi banner software FTP server, kredensial yang dipakai penyerang untuk login, serta ukuran file malware yang diunduh.
+File soal16_ftp_malware.pcapng dibuka di Wireshark, lalu diterapkan display filter ftp untuk menyaring seluruh perintah FTP. Sesi login knights_agent (frame 64-98) ditelusuri lewat Follow → TCP Stream untuk membaca urutan perintahnya sekaligus.
+
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-16 at 23 30 15" src="https://github.com/user-attachments/assets/6ab9a3ec-e24e-4a00-9c97-7cc5290e21ec" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-16 at 22 39 37" src="https://github.com/user-attachments/assets/4f73f22c-83ed-4d4a-98a4-6fb3e67e81f8" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-16 at 23 07 46" src="https://github.com/user-attachments/assets/bc3049b2-dadb-4b4f-9627-f7a43c463fd8" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-16 at 23 58 12" src="https://github.com/user-attachments/assets/a2f7f29d-44b5-4b5b-8b71-850ccc8dc27e" />
+
+Hasil analisis (frame 64-98):
+
+Item	Frame	Nilai
+Banner software FTP server	64	vsftpd 3.0.5
+Kredensial (format user:pass)	66, 70	knights_agent:N4v1_s3cur3_2026
+Ukuran file malware	82, 84	524288 bytes (dikonfirmasi ulang di frame 92)
+Nama file	82, 92	knights_payload.exe
+Status transfer	94	226 Transfer complete
+
+Catatan: di seluruh capture tidak ditemukan perintah STOR (upload) — yang terekam hanya proses download file oleh knights_agent dari server 198.51.100.7 (di luar subnet internal 10.86.x.x, kemungkinan server rogue milik Eiri). Proses "penanaman" malware ke server itu sendiri terjadi di luar cakupan capture.
+Validasi: nc 10.4.89.247 3403
+
+17. Alice membuat halaman web di node-nya. Eiri memanfaatkan celah untuk mengunduh payload berbahaya ke sistem Alice melalui protokol HTTP tanpa enkripsi. Analisis file capture untuk mengidentifikasi nama domain (Host) tempat malware diunduh, alamat IP server penyerang, nama file executable malware, serta kode status HTTP yang dikembalikan.
+File soal17_wired_http_c2.pcapng dibuka di Wireshark dengan display filter http. Ditemukan 3 sesi HTTP; dua di antaranya traffic web normal (CSS dari cdnstore.io, HTML dari protocol7.co.jp), sedangkan satu sesi (frame 30-31) men-download file .exe dengan Content-Type: application/octet-stream — inilah yang jadi jawaban soal.
+
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-16 at 23 30 32" src="https://github.com/user-attachments/assets/a52853f9-1041-49d6-addc-c718e9acab53" />
+<img width="1280" height="832" alt="WhatsApp Image 2026-09-16 at 23 46 44" src="https://github.com/user-attachments/assets/4bb55456-dabe-4343-83ec-badccabac45a" />
+
+Hasil analisis:
+Item	Frame	Nilai
+Domain (Host header)	30	wired-update.net
+IP server penyerang	30	203.0.113.42
+Nama file executable	30	navi_agent.exe
+Kode status HTTP	31	200 OK
+
+Frame 30 berisi GET /navi_agent.exe HTTP/1.1 dari Alice (10.7.1.50) ke 203.0.113.42:80; frame 31 responsnya 200 OK dengan Content-Type: application/octet-stream, mengonfirmasi file tersebut memang executable.
+Validasi: nc 10.4.89.247 3404
+
+18. Eiri mengubah taktik penyerangan dengan menanamkan file malware menggunakan protokol file sharing SMB. Analisis file capture untuk mengidentifikasi nama protokol jaringan yang dieksploitasi, IP pengirim dan penerima, folder tujuan penyimpanan malware pada sistem korban, serta nama file executable malware yang ditransfer.
+File soal18_wired_smb_transfer.pcapng dibuka di Wireshark dengan display filter smb2. Urutan sesinya: Negotiate → Session Setup → Tree Connect ke \\10.7.1.50\ADMIN$ → Create file System32\wired_trojan_payload.exe → Write → Close.
+
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-16 at 23 58 38" src="https://github.com/user-attachments/assets/26479721-ec67-4dd3-88ac-369d57358df5" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-16 at 23 41 46" src="https://github.com/user-attachments/assets/52a23775-bc5e-4843-b8d0-4a87915e3bcb" />
+
+Hasil analisis:
+Item	Frame	Nilai
+Protokol yang dieksploitasi	4-26	SMB (SMBv2) via administrative share ADMIN$
+IP pengirim (penyerang)	12, 16	10.7.3.100
+IP penerima (korban)	12, 16	10.7.1.50
+Folder tujuan malware	16	ADMIN$\System32 (setara C:\Windows\System32)
+Nama file executable	16	wired_trojan_payload.exe
+
+Penulisan file lewat share ADMIN$ (share administratif bawaan Windows yang mengarah ke C:\Windows) menunjukkan teknik penyebaran malware langsung ke folder sistem korban.
+Validasi: nc 10.4.89.247 3405
+
+19. Eiri meneror jaringan dengan mengirimkan email pemerasan melalui protokol SMTP tanpa enkripsi. Analisis file capture pada stream TCP terkait untuk mengidentifikasi alamat email korban yang ditargetkan, password korban yang diklaim bocor oleh penyerang, jenis malware yang diinfeksikan, batas waktu (dalam hari) yang diberikan, serta MailClientID yang tercantum pada pesan.
+
+File soal19_wired_smtp_threat.pcapng punya 7 TCP stream. Tiap stream dicek satu-satu lewat Follow → TCP Stream di Wireshark. Enam stream berisi email normal antar-entitas internal, sedangkan tcp.stream 6 berisi sesi SMTP mencurigakan dari IP eksternal 185.234.72.19 ke mail server 203.0.113.100:25 (mail.protocol7.co.jp) — dikirim polos tanpa STARTTLS.
+
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-17 at 00 03 52" src="https://github.com/user-attachments/assets/9287fc74-21c3-40b9-87d7-4619ba4d1caf" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-17 at 00 04 15" src="https://github.com/user-attachments/assets/06803ab7-aa6f-4938-a246-75d84833f213" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-17 at 00 04 25" src="https://github.com/user-attachments/assets/03a6845c-6d10-4edd-b67b-b588d2d0c74e" />
+
+Hasil analisis (tcp.stream 6):
+Item	Nilai
+Email korban	victim@protocol7.co.jp
+Password yang diklaim bocor	pr0tocol_7_user
+Jenis malware	ransomware
+Batas waktu	3 hari (72 jam)
+MailClientID	7719980706
+
+Sesi diawali MAIL FROM:<attacker@darkwired.net> dan RCPT TO:<victim@protocol7.co.jp> — karena tanpa enkripsi, seluruh isi ancaman langsung terbaca dari capture.
+Validasi: nc 10.4.89.247 3406
+
+20.Untuk rencana pamungkasnya, Eiri menyembunyikan komunikasi malware di balik saluran terenkripsi TLS. Alice telah menyediakan file keylog untuk mendekripsi lalu lintas data tersebut. Analisis file capture bersama file keylog untuk mengidentifikasi versi protokol TLS yang dinegosiasikan, nama domain (SNI) yang diakses, alamat IP server HTTPS penyerang, User-Agent yang digunakan, serta HTTP request method dan path yang tersembunyi di dalam sesi terdekripsi.
+File wired_tls_decrypt.pcapng dibuka di Wireshark, lalu file keyslogfile.txt didaftarkan lewat Preferences → Protocols → TLS → (Pre)-Master-Secret log filename. Setelah itu traffic yang tadinya Application Data terenkripsi otomatis ter-decode jadi paket HTTP biasa.
+
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-17 at 00 13 44" src="https://github.com/user-attachments/assets/e2f7c48e-90c6-49ce-b1e3-339f7583ac1a" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-17 at 00 32 37" src="https://github.com/user-attachments/assets/b68a732a-d861-4ac2-b8c4-4150c9003064" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-17 at 00 33 49" src="https://github.com/user-attachments/assets/0444faca-a2ba-4f96-ab1b-002eb4e15b97" />
+<img width="2940" height="1912" alt="WhatsApp Image 2026-09-17 at 00 32 15" src="https://github.com/user-attachments/assets/0be2babf-8f6f-4252-884b-6041fb921e66" />
+
+Hasil analisis:
+Item	Nilai
+Versi TLS yang dinegosiasikan	TLS 1.2
+Domain (SNI)	example.com
+IP server HTTPS penyerang	93.184.216.34
+User-Agent	curl/7.62.0
+HTTP request method & path	HEAD /
+
+Capture hanya berisi satu sesi (handshake TLS lalu Application Data di frame 6-7). Setelah didekripsi, isinya adalah request HEAD / HTTP/1.1 yang minimalis — pola khas tool command-line, bukan browser, konsisten dengan traffic command-and-control yang disamarkan di balik TLS.
+
+Validasi: nc 10.4.89.247 3407
