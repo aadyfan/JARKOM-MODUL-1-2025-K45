@@ -567,36 +567,144 @@ KOMJAR26{W1r3d_Brut3_cGduWZkXcbkOzOccwhMLtAkFr}
 
 > **Catatan validasi:** sudah tuntas dan cocok 100% dengan hasil analisis Wireshark — attacker IP, target, password, dan versi web server yang dimasukkan ke socket semuanya sama persis dengan yang terbaca di HTTP Stream #59, dan server memang mengonfirmasi dengan mengeluarkan flag. Tidak ada yang perlu dikoreksi.
 
-15. Eiri memasang perangkat keyboard USB berbahaya di node Alice. Buka file `wired_usb_hid.pcap`, identifikasi Vendor ID & Product ID perangkat USB dari deskriptornya, alamat nomor device USB, serta pesan rahasia yang berhasil dicuri dari keystroke. Validasi temuan ke socket server port `3402`.
-
-> **Belum dieksekusi** — soal ini masih tahap perencanaan metode (belum ada capture/hasil nyata). Berikut kerangka langkah yang siap dipakai:
-
-Ekstraksi payload HID interrupt data (`usb.capdata` atau `usbhid.data`) memakai `tshark`:
-
+15. Eiri memasang perangkat keyboard USB berbahaya di node Alice. Buka file `soal15_wired_usb_hid.pcap`, identifikasi Vendor ID & Product ID perangkat USB dari deskriptornya, alamat nomor device USB, serta pesan rahasia yang berhasil dicuri dari keystroke. Validasi temuan ke socket server port `3402`.
+Vendor ID & Product ID diambil dari paket USB Device Descriptor (`bDescriptorType == 1`):
+ 
 ```sh
-tshark -r wired_usb_hid.pcap -Y "usb.capdata || usbhid.data" -T fields -e usb.capdata -e usbhid.data > keystrokes.txt
+tshark -r soal15_wired_usb_hid.pcap -Y "usb.bDescriptorType == 1" -T fields -e frame.number -e usb.idVendor -e usb.idProduct -e usb.device_address
 ```
-
-Byte ke-0 (status modifier/Shift) dan byte ke-2 (HID keycode) tiap baris dipetakan lewat skrip Python parser untuk merekonstruksi pesan lengkap yang diketik korban.
-
-_(Isi bagian ini dengan: Vendor ID & Product ID dari USB Device Descriptor — cek paket `GET DESCRIPTOR Response DEVICE` di Wireshark filter `usb.idVendor` / `usb.idProduct` —, alamat nomor device USB dari kolom `usb.device_address`, serta teks pesan hasil dekode keystroke.)_
-
-![](assets/usbhid-descriptor-vendorid-productid.png)
-
-![](assets/usbhid-decoded-keystroke-output.png)
-
-Koneksi validasi ke socket server:
-
+ 
+```
+2    0x046d  0xc31c  0
+```
+ 
+Dikonfirmasi juga lewat Wireshark GUI (filter `usb.idVendor`), expand bagian **DEVICE DESCRIPTOR**. Wireshark otomatis mencocokkan angka `idVendor`/`idProduct` ke database USB ID bawaannya sendiri, sehingga langsung menampilkan nama vendor & produk terdaftar untuk ID tersebut:
+ 
+![](assets/usbhid-vendorid-productid-descriptor.png)
+ 
+```
+idVendor: Logitech, Inc. (0x046d)
+idProduct: Keyboard K120 (0xc31c)
+```
+ 
+Nilai mentahnya juga terlihat di hex dump packet: byte `6d 04` (little-endian) = `0x046d`, dan `1c c3` (little-endian) = `0xc31c` — cocok persis dengan hasil `tshark` di atas.
+ 
+Device address `0` di atas hanyalah alamat sementara sebelum proses `SET_ADDRESS` (fase awal enumerasi USB). Device address yang benar-benar dipakai keyboard saat mengirim keystroke dicek lewat paket interrupt data-nya:
+ 
+```sh
+tshark -r soal15_wired_usb_hid.pcap -Y "usb.capdata || usbhid.data" -T fields -e usb.device_address
+```
+ 
+Seluruh baris hasilnya konsisten `7`, dikonfirmasi juga lewat Wireshark GUI (filter `usb.device_address == 7`, expand bagian **USB URB**, baris **"Device address: 7"**):
+ 
+![](assets/usbhid-device-address-detail.png)
+ 
+Payload keystroke (`usb.capdata`/`usbhid.data`) diekstrak dan diterjemahkan lewat skrip Python `decode_hid.py` yang memetakan byte ke-0 (modifier/Shift) dan byte ke-2 (HID keycode) tiap laporan 8-byte ke karakter. Skrip ini otomatis mencari file pcap USB di folder yang sama dan menjalankan `tshark` secara internal (tanpa perlu bikin `keystrokes.txt` manual):
+ 
+```python
+import subprocess
+import glob
+import os
+ 
+key_codes = {
+    0x04: ('a', 'A'), 0x05: ('b', 'B'), 0x06: ('c', 'C'), 0x07: ('d', 'D'),
+    0x08: ('e', 'E'), 0x09: ('f', 'F'), 0x0A: ('g', 'G'), 0x0B: ('h', 'H'),
+    0x0C: ('i', 'I'), 0x0D: ('j', 'J'), 0x0E: ('k', 'K'), 0x0F: ('l', 'L'),
+    0x10: ('m', 'M'), 0x11: ('n', 'N'), 0x12: ('o', 'O'), 0x13: ('p', 'P'),
+    0x14: ('q', 'Q'), 0x15: ('r', 'R'), 0x16: ('s', 'S'), 0x17: ('t', 'T'),
+    0x18: ('u', 'U'), 0x19: ('v', 'V'), 0x1A: ('w', 'W'), 0x1B: ('x', 'X'),
+    0x1C: ('y', 'Y'), 0x1D: ('z', 'Z'), 0x1E: ('1', '!'), 0x1F: ('2', '@'),
+    0x20: ('3', '#'), 0x21: ('4', '$'), 0x22: ('5', '%'), 0x23: ('6', '^'),
+    0x24: ('7', '&'), 0x25: ('8', '*'), 0x26: ('9', '('), 0x27: ('0', ')'),
+    0x28: ('\n', '\n'), 0x2A: ('[DEL]', '[DEL]'), 0x2C: (' ', ' '),
+    0x2D: ('-', '_'), 0x2E: ('=', '+'), 0x2F: ('[', '{'), 0x30: (']', '}'),
+    0x31: ('\\', '|'), 0x33: (';', ':'), 0x34: ("'", '"'), 0x37: ('.', '>'),
+    0x38: ('/', '?')
+}
+ 
+# Cari otomatis file pcap USB di folder ini
+pcap_files = glob.glob("*usb*.pcap*")
+if not pcap_files:
+    print("File pcap USB tidak ditemukan di folder ini! Cek nama filenya dengan perintah dir.")
+    exit()
+ 
+pcap_target = pcap_files[0]
+print(f"Menganalisis file: {pcap_target}")
+ 
+cmd = [
+    r"C:\Program Files\Wireshark\tshark.exe",
+    "-r", pcap_target,
+    "-Y", "usb.capdata || usbhid.data",
+    "-T", "fields",
+    "-e", "usb.capdata",
+    "-e", "usbhid.data"
+]
+ 
+proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+lines = proc.stdout.splitlines()
+ 
+output = []
+for line in lines:
+    hex_data = line.strip().replace(":", "")
+    if not hex_data:
+        continue
+    try:
+        data = bytes.fromhex(hex_data)
+        if len(data) < 3:
+            continue
+        modifier = data[0]
+        keycode = data[2]
+ 
+        if keycode != 0 and keycode in key_codes:
+            is_shift = (modifier & 0x02) or (modifier & 0x20)
+            char = key_codes[keycode][1] if is_shift else key_codes[keycode][0]
+            if char == '[DEL]':
+                if output:
+                    output.pop()
+            else:
+                output.append(char)
+    except ValueError:
+        continue
+ 
+print("\n=== TEKS HASIL DECODE USB HID ===")
+print("".join(output))
+```
+ 
+Jalankan:
+ 
+```sh
+python decode_hid.py
+```
+ 
+```
+=== TEKS HASIL DECODE USB HID ===
+Wired_Protocol_7_is_alive_2026
+```
+ 
+**Data hasil temuan:**
+ 
+| Item | Nilai |
+| --- | --- |
+| Vendor ID | `0x046d` |
+| Product ID | `0xc31c` |
+| Device Address | `7` |
+| Pesan rahasia (decoded keystroke) | `Wired_Protocol_7_is_alive_2026` |
+ 
+Validasi ke socket server dari node **Lain** di GNS3:
+ 
 ```sh
 nc 10.4.89.247 3402
-# atau: ncat 10.4.89.247 3402
 ```
-
+ 
+Jawaban dimasukkan sesuai urutan pertanyaan (Vendor ID → Product ID → device address → pesan rahasia) hingga keluar flag:
+ 
 ![](assets/usbhid-validasi-port3402.png)
-
-_(Isi bagian ini dengan flag yang keluar setelah Vendor ID, Product ID, device address, dan pesan hasil dekode dimasukkan.)_
-
-> **Catatan validasi:** pendekatan ekstraksi `tshark` + parsing keycode benar secara prinsip untuk USB boot-protocol keyboard standar. Sebelum dijalankan, cek dulu di Wireshark: (1) field mana yang benar-benar terisi, `usb.capdata` atau `usbhid.data`; (2) mapping keycode di skrip mencakup semua tombol yang dipakai di pesan rahasia (kalau ada Tab/Esc/tanda baca di luar tabel, karakternya bisa diam-diam terlewat); (3) Vendor ID/Product ID/device address **tidak** ada di payload keystroke — harus dicari terpisah di paket USB Descriptor (biasanya di awal capture saat device pertama kali di-enumerate) dengan filter `usb.idVendor`, `usb.idProduct`, dan `usb.device_address`.
+ 
+```
+KOMJAR26{USB_K3ystr0k3_nM0pRmDSSzXL9AMo0DLdx3cPW}
+```
+ 
+> **Catatan validasi:** sudah tuntas dan dikonfirmasi benar oleh server (flag keluar). Vendor ID `0x046d` dan Product ID `0xc31c` terbukti asli terbaca langsung dari packet DEVICE DESCRIPTOR (bukan asumsi), dan nama "Logitech, Inc." / "Keyboard K120" yang muncul di Wireshark adalah hasil pencocokan otomatis Wireshark terhadap database USB ID resminya sendiri, bukan karangan. Satu hal yang sempat keliru di proses awal: device address diasumsikan `0` (nilai dari packet descriptor), padahal itu cuma alamat sementara pra-enumerasi — device address asli (`7`) baru ketemu setelah dicek dari paket interrupt data keystroke-nya, bukan dari paket descriptor.
 
 16. Eiri meninggalkan jejak pada FTP Server Chisa dengan menanamkan file malware yang kemudian diunduh oleh pihak lain menggunakan akun knights_agent. Analisis file capture untuk mengidentifikasi banner software FTP server, kredensial yang dipakai penyerang untuk login, serta ukuran file malware yang diunduh.
 File soal16_ftp_malware.pcapng dibuka di Wireshark, lalu diterapkan display filter ftp untuk menyaring seluruh perintah FTP. Sesi login knights_agent (frame 64-98) ditelusuri lewat Follow → TCP Stream untuk membaca urutan perintahnya sekaligus.
