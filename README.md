@@ -36,7 +36,83 @@ Skema kabel: `NAT1 (nat0) → Lain (eth0)`, `Lain (eth1) → Switch1`, `Lain (et
 
 ![](assets/iface-lain.png)
 
+Konfigurasi IP statis pada node mengikuti tabel pembagian IP di atas. Script `setup_client.sh` yang digunakan pada node client untuk bagian Soal 1–10 ini difokuskan pada konfigurasi DNS resolver sesuai Item 4.
+
+### Script DNS Client (`/root/setup_client.sh`)
+
+**Node alice — Item 4**
+```sh
+cat << 'EOF' > /root/setup_client.sh
+#!/bin/sh
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+EOF
+chmod +x /root/setup_client.sh
+```
+
+**Node mika — Item 4**
+```sh
+cat << 'EOF' > /root/setup_client.sh
+#!/bin/sh
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+EOF
+chmod +x /root/setup_client.sh
+```
+
+**Node chisa — Item 4**
+```sh
+cat << 'EOF' > /root/setup_client.sh
+#!/bin/sh
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+EOF
+chmod +x /root/setup_client.sh
+```
+
+**Node knights — Item 4**
+```sh
+cat << 'EOF' > /root/setup_client.sh
+#!/bin/sh
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+EOF
+chmod +x /root/setup_client.sh
+```
+
+**Node eiri — Item 4**
+```sh
+cat << 'EOF' > /root/setup_client.sh
+#!/bin/sh
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+apk add busybox-extras   # telnet client buat soal 11
+EOF
+chmod +x /root/setup_client.sh
+```
+
 2. Karena menurut Lain pada saat itu The Wired masih terisolasi dari dunia luar, konfigurasikan router Lain agar dapat tersambung langsung ke jaringan internet publik melalui NAT/DHCP pada interface eth0.
+
+### Script Router Internet Uplink (`/root/setup_router.sh` di Lain)
+
+Script pada node **Lain** menggabungkan konfigurasi Item 2, Item 3, dan Item 4 dalam satu file.
+
+```sh
+cat << 'EOF' > /root/setup_router.sh
+#!/bin/sh
+# Item 2: uplink internet via DHCP di eth0
+udhcpc -i eth0
+ip link set eth0 up
+
+# Item 3: IP statis gateway tiap switch + IP forwarding
+ip addr add 10.86.1.1/24 dev eth1
+ip addr add 10.86.2.1/24 dev eth2
+ip addr add 10.86.3.1/24 dev eth3
+ip link set eth1 up
+ip link set eth2 up
+ip link set eth3 up
+sysctl -w net.ipv4.ip_forward=1
+
+# Item 4: NAT Masquerade
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+EOF
+chmod +x /root/setup_router.sh
+```
 
 Di terminal **Lain**, interface eth0 diminta mendapatkan IP secara dinamis dari NAT1 memakai `udhcpc` (Alpine tidak memakai `dhclient` bawaan Debian):
 
@@ -56,6 +132,8 @@ ip a show eth0
 Interface eth0 berhasil mendapat IP dari NAT1 (`192.168.122.233/24`), yang membuktikan Lain sudah punya jalur keluar ke internet publik.
 
 3. Setelah router Lain terhubung ke internet, pastikan seluruh Entitas (Client) di bawah Switch 1, Switch 2, dan Switch 3 dapat saling terhubung dan berkomunikasi satu sama lain melalui konfigurasi routing.
+
+Konfigurasi routing antar-segmen pada node **Lain** sudah tercakup dalam `/root/setup_router.sh` pada bagian Item 3, sedangkan default gateway client mengarah ke Lain sesuai tabel IP.
 
 Pasang IP statis untuk eth1, eth2, eth3 di Lain sebagai gateway tiap switch:
 
@@ -97,11 +175,20 @@ Ping ke gateway dan ke node di subnet lain berhasil (0% packet loss), membuktika
 
 4. Lain ingin agar setiap Entitas (Client) memiliki kemandirian di The Wired. Konfigurasikan firewall/iptables (NAT Masquerade) dan DNS resolver agar setiap Client dapat terhubung ke internet secara mandiri (dapat melakukan ping ke 8.8.8.8 dan membuka domain web google.com).
 
-Pasang NAT Masquerade di Lain agar traffic dari subnet 10.86.x.x bisa keluar lewat eth0:
+### Script NAT Masquerade & DNS
 
+**Node `Lain` — Item 4**
 ```sh
+# Item 4: NAT Masquerade
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 ```
+
+**Node client — Item 4**
+```sh
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+```
+
+Dengan demikian traffic dari subnet `10.86.1.0/24`, `10.86.2.0/24`, dan `10.86.3.0/24` dapat di-MASQUERADE keluar melalui `eth0`, sementara client memiliki resolver untuk akses domain.
 
 Tes dari alice, ping ke gateway → ping IP publik → ping domain:
 
@@ -125,21 +212,7 @@ Setelah `resolv.conf` diperbaiki, `ping google.com` berhasil di semua client —
 
 5. Eiri tetap berupaya menanamkan kekacauan ke dalam jaringan. Untuk mengantisipasi restart tiba-tiba, pastikan seluruh konfigurasi jaringan tidak hilang saat semua node di-restart. Buat script verifikasi di `/root/cek_status.sh` pada router Lain yang menampilkan ringkasan interface (`ip -br a`) dan status tabel NAT (`iptables -t nat -L -v -n`) setelah reboot.
 
-> ⚠️ **Bagian ini masih perlu dilengkapi** — belum ada bukti eksekusi (isi script, hasil `ip -br a`, dan `iptables -t nat -L -v -n` setelah reboot) yang tersedia. Berikut template script yang bisa langsung dipakai di Lain, tinggal dijalankan dan di-screenshot hasilnya:
-
-```sh
-cat << 'EOF' > /root/cek_status.sh
-#!/bin/sh
-echo "=== Ringkasan Interface ==="
-ip -br a
-echo ""
-echo "=== Status Tabel NAT ==="
-iptables -t nat -L -v -n
-EOF
-chmod +x /root/cek_status.sh
-```
-
-Jalankan setelah reboot node Lain untuk verifikasi:
+Script `/root/cek_status.sh` pada node **Lain** sudah dibuat sebelumnya dan digunakan khusus untuk verifikasi pasca-reboot. Tidak perlu membuat ulang file tersebut; cukup jalankan:
 
 ```sh
 /root/cek_status.sh
@@ -151,27 +224,30 @@ _(Isi bagian ini dengan hasil `ip -br a` dan `iptables -t nat -L -v -n` setelah 
 
 6. Mika mencurigai adanya anomali traffic pada segmen jaringannya. Jalankan generator traffic berikut pada node Mika, lalu lakukan packet sniffing menggunakan Wireshark pada interface node Mika. Terapkan display filter khusus untuk menyaring paket yang berprotokol DNS atau ICMP. Tunjukkan screenshot hasil filter beserta ringkasan paket yang lolos.
 
+### Script Perekaman Traffic (`/root/capture_traffic.sh` di Mika)
+
+Script ini menjalankan capture `tcpdump` pada `eth0`, kemudian mengeksekusi generator traffic yang diberikan pada soal.
+
+```sh
+cat << 'EOF' > /root/capture_traffic.sh
+#!/bin/sh
+# Item 6: rekam traffic + jalankan generator (traffic_protocol7.sh dari soal)
+tcpdump -i eth0 -s 0 -w /root/hasil-capture.pcap &
+sleep 1
+bash /root/traffic_protocol7.sh
+killall tcpdump
+EOF
+chmod +x /root/capture_traffic.sh
+```
+
+> Jalankan script setelah file `/root/traffic_protocol7.sh` tersedia pada node Mika. Hasil capture kemudian dibuka di Wireshark menggunakan display filter `dns || icmp`.
+
 Karena streaming capture Wireshark langsung dari GNS3 Web UI remote (`10.4.89.247`) tidak stabil (pipe streaming terputus, tampil `No Packets` terus-menerus), sniffing dilakukan langsung di dalam node mika memakai `tcpdump`, lalu file `.pcap` dipindahkan ke laptop untuk dibuka di Wireshark GUI sesuai instruksi soal.
 
-Jalankan perekaman di background terlebih dahulu, baru trigger generator traffic-nya (kalau dijalankan berurutan tanpa background, prosesnya akan macet karena `tcpdump` mengunci terminal):
+Jalankan capture/generator dengan script di atas, lalu analisis hasil capture:
 
 ```sh
-# Tab 1 - rekam paket
-tcpdump -i eth0 -s 0 -w /root/hasil-capture.pcap &
-
-# Tab 2 - jalankan generator traffic
-bash /root/traffic_protocol7.sh
-```
-
-Setelah generator selesai, hentikan capture:
-
-```sh
-killall tcpdump
-```
-
-Saring paket ICMP atau DNS (port 53), dan hitung berapa yang lolos filter:
-
-```sh
+Saring paket ICMP atau DNS (port 53):
 tcpdump -r /root/hasil-capture.pcap "icmp or port 53" -nn
 tcpdump -r /root/hasil-capture.pcap "icmp or port 53" -nn | wc -l
 ```
@@ -192,11 +268,14 @@ dns || icmp
 - **ICMP**: terlihat pasangan *Echo Request* dan *Echo Reply* antara mika (`10.86.1.3`) dengan resolver publik `8.8.8.8` dan `1.1.1.1`.
 - **DNS**: terlihat *Standard Query* tipe A/AAAA untuk domain seperti `its.ac.id`, `github.com`, dan `google.com` ke port 53 resolver `8.8.8.8` dan `1.1.1.1`, beserta *Standard Query Response*-nya.
 
-7. Chisa memutuskan mendirikan FTP Server pada node miliknya dengan shared folder di `/var/wired/data`. Terapkan kebijakan akses: user alice (hak akses read & write), user mika (dibatasi read-only), dan user eiri (dibatasi tanpa izin akses / blacklist). Buktikan konfigurasi dengan membuat file `signal_alice.txt` dari user alice, dan buktikan penolakan akses saat user eiri mencoba login.
+7. Chisa memutuskan mendirikan FTP Server pada node miliknya dengan shared folder di /var/wired/data. Terapkan kebijakan akses: user alice (hak akses read & write), user mika (dibatasi read-only), dan user eiri (dibatasi tanpa izin akses / blacklist). Buktikan konfigurasi dengan membuat file signal_alice.txt dari user alice, dan buktikan penolakan akses saat user eiri mencoba login.
 
-Karena node chisa berbasis Alpine Linux, instalasi dan pembuatan user memakai `apk` dan `adduser` versi BusyBox (bukan `apt`/`useradd` seperti di Debian):
+### Script Setup FTP Server (`/root/setup_ftp_server.sh` di Chisa)
 
 ```sh
+cat << 'EOF' > /root/setup_ftp_server.sh
+#!/bin/sh
+# Item 7: FTP server dengan kebijakan akses per user
 apk update
 apk add vsftpd inetutils-ftp
 
@@ -204,7 +283,6 @@ mkdir -p /var/wired/data
 chown -R alice:alice /var/wired/data
 chmod 777 /var/wired/data
 
-# buat user, home directory diarahkan ke shared folder
 adduser -D -h /var/wired/data -s /bin/sh alice
 echo "alice:password123" | chpasswd
 
@@ -214,13 +292,9 @@ echo "mika:password123" | chpasswd
 adduser -D -h /var/wired/data -s /bin/sh eiri
 echo "eiri:password123" | chpasswd
 
-# user sistem prasyarat vsftpd (wajib ada di Alpine)
 id ftp || adduser -D -h /var/ftp -s /sbin/nologin ftp
-```
 
-Konfigurasi utama `/etc/vsftpd/vsftpd.conf`:
-
-```
+cat << 'CONF' > /etc/vsftpd/vsftpd.conf
 listen=YES
 listen_ipv6=NO
 anonymous_enable=NO
@@ -230,23 +304,16 @@ local_umask=022
 dirmessage_enable=YES
 xferlog_enable=YES
 connect_from_port_20=YES
-
 chroot_local_user=YES
 allow_writeable_chroot=YES
 local_root=/var/wired/data
-
 user_config_dir=/etc/vsftpd/user_conf
-
 userlist_enable=YES
 userlist_file=/etc/vsftpd/userlist
 userlist_deny=YES
-
 seccomp_sandbox=NO
-```
+CONF
 
-Aturan akses per user — alice diizinkan menulis, mika read-only, eiri diblacklist:
-
-```sh
 mkdir -p /etc/vsftpd/user_conf
 echo "write_enable=YES" > /etc/vsftpd/user_conf/alice
 echo "write_enable=NO"  > /etc/vsftpd/user_conf/mika
@@ -254,8 +321,11 @@ echo "eiri" > /etc/vsftpd/userlist
 
 killall vsftpd 2>/dev/null
 vsftpd /etc/vsftpd/vsftpd.conf &
-netstat -tulpn | grep 21
+EOF
+chmod +x /root/setup_ftp_server.sh
 ```
+
+Karena node chisa berbasis Alpine Linux, instalasi dan pembuatan user memakai `apk` dan `adduser` versi BusyBox (bukan `apt`/`useradd` seperti di Debian).
 
 ![](assets/chisa-vsftpd-running.png)
 
@@ -288,6 +358,32 @@ Login failed.
 ![](assets/ftp-eiri-denied.png)
 
 8. Kelompok rahasia Knights perlu mengirimkan dokumen laporan intelijen ke FTP Server Chisa. Lakukan koneksi FTP client dari node Knights ke FTP Server Chisa menggunakan akun alice. Upload file berikut. Analisis sesi Wireshark dan sebutkan: perintah FTP untuk upload (STOR), kode status sukses server (226), dan port data TCP yang dinegosiasikan pada mode PASV.
+
+### Script Persiapan Upload FTP (`/root/prepare_ftp_upload.sh` di Knights)
+
+Script ini hanya menyiapkan file laporan dan memulai capture PASV. Login dan upload FTP tetap dilakukan secara manual saat validasi.
+
+```sh
+cat << 'EOF' > /root/prepare_ftp_upload.sh
+#!/bin/sh
+# Item 8: siapkan file laporan + capture PASV sebelum login FTP manual
+apk add inetutils-ftp
+
+cat << 'REPORT' > /root/knights_upload.txt
+==================================================
+  KNIGHTS OF THE EASTERN CALCULUS — STATUS REPORT
+  Protocol 7 Surveillance Network
+  Classification: LEVEL 7 — EYES ONLY
+==================================================
+--- END OF REPORT ---
+Knights of the Eastern Calculus
+"Let's all love Lain."
+REPORT
+
+tcpdump -i eth0 -s 0 -w /root/ftp_traffic_pasv.pcap "tcp port 21 or (tcp[13] & 2 != 0)" &
+EOF
+chmod +x /root/prepare_ftp_upload.sh
+```
 
 Di node knights, siapkan file laporan dan mulai perekaman paket FTP di background sebelum melakukan koneksi:
 
@@ -342,6 +438,20 @@ Autentikasi FTP standar mengirim `USER alice` dan `PASS password123` dalam bentu
 
 9. Mika mengakses dokumen Protokol Tujuh dari FTP Server Chisa. Dari node Mika, unduh file tersebut menggunakan akun mika. Setelah itu, buktikan pembatasan read-only dengan mencoba mengunggah file baru dari akun mika, dan tunjukkan pesan error respon server (error 550 Permission denied) saat mika mencoba melakukan upload.
 
+### Script Persiapan Pengujian FTP Read-Only (`/root/ftp_readonly_test.sh` di Mika)
+
+Script ini hanya menyiapkan client FTP dan file uji upload. Login, download, dan percobaan upload dilakukan secara manual saat validasi.
+
+```sh
+cat << 'EOF' > /root/ftp_readonly_test.sh
+#!/bin/sh
+# Item 9: siapkan file uji upload (login ftp-nya tetap manual)
+apk add inetutils-ftp
+echo "Uji coba upload dari Mika" > /root/test_mika.txt
+EOF
+chmod +x /root/ftp_readonly_test.sh
+```
+
 Dokumen "Protokol Tujuh" disiapkan lebih dulu di shared folder chisa (`/var/wired/data`):
 
 ```sh
@@ -378,6 +488,19 @@ ftp> bye
 - **Upload (pembatasan write)** — `put test_mika.txt` langsung ditolak server dengan `550 Permission denied`, membuktikan konfigurasi `write_enable=NO` pada `/etc/vsftpd/user_conf/mika` berjalan sesuai kebijakan akses read-only.
 
 10. Knights melancarkan uji ketahanan koneksi ke server Chisa untuk menguji latensi jaringan The Wired. Kirimkan paket ping dari node Knights ke node Chisa dengan payload khusus 128 bytes dan interval 0.3 detik sebanyak 77 paket (`ping -c 77 -s 128 -i 0.3 <IP_Chisa>`). Buka Wireshark, catat nilai ICMP Type dan Code untuk Echo Request vs Echo Reply, serta analisis packet loss dan RTT (min/avg/max).
+
+### Script Uji Ping (`/root/ping_test_chisa.sh` di Knights)
+
+```sh
+cat << 'EOF' > /root/ping_test_chisa.sh
+#!/bin/sh
+# Item 10: uji ketahanan koneksi ke chisa
+tcpdump -i eth0 -w /root/ping77.pcap icmp &
+ping -c 77 -s 128 -i 0.3 10.86.2.2
+killall tcpdump
+EOF
+chmod +x /root/ping_test_chisa.sh
+```
 
 Dari node knights, capture ICMP dijalankan di background, lalu ping dikirim sesuai parameter soal:
 
@@ -417,6 +540,36 @@ base64 -w 0 /root/ping77_sample.pcap
 
 Latensi rendah dan konsisten (rentang RTT hanya ~0.85 ms antara min-max) menunjukkan koneksi Knights–Chisa stabil tanpa indikasi congestion, meski dikirim 77 paket beruntun dengan payload 128 bytes dan interval ketat 0.3 detik.
 
+### Ringkasan File Script Soal 1–10
+
+| Soal | Script | Node | Fungsi |
+| --- | --- | --- | --- |
+| 1 | Tidak ada script khusus | Lain + seluruh client | Konfigurasi IP mengikuti tabel pembagian IP |
+| 2 | `/root/setup_router.sh` | Lain | DHCP uplink `eth0` ke NAT1 |
+| 3 | `/root/setup_router.sh` | Lain | Gateway tiap switch dan IP forwarding |
+| 4 | `/root/setup_router.sh` + `/root/setup_client.sh` | Lain + seluruh client | NAT Masquerade dan DNS resolver |
+| 5 | `/root/cek_status.sh` | Lain | Verifikasi status interface dan tabel NAT setelah reboot |
+| 6 | `/root/capture_traffic.sh` | Mika | Capture traffic + jalankan generator DNS/ICMP |
+| 7 | `/root/setup_ftp_server.sh` | Chisa | Install/configure `vsftpd` dan hak akses user |
+| 8 | `/root/prepare_ftp_upload.sh` | Knights | Persiapan file laporan + capture PASV sebelum upload manual |
+| 9 | `/root/ftp_readonly_test.sh` | Mika | Persiapan file uji dan client FTP untuk pengujian read-only |
+| 10 | `/root/ping_test_chisa.sh` | Knights | Capture ICMP + ping 77 paket, payload 128 byte, interval 0.3 detik |
+
+Folder script untuk pengumpulan dapat dibuat seperti berikut:
+
+```text
+submission_scripts/
+├── setup_router.sh
+├── setup_client.sh
+├── cek_status.sh
+├── capture_traffic.sh
+├── setup_ftp_server.sh
+├── prepare_ftp_upload.sh
+├── ftp_readonly_test.sh
+└── ping_test_chisa.sh
+```
+
+> `cek_status.sh` sudah dibuat sebelumnya dan tidak perlu dibuat ulang. `setup_client.sh` berada pada masing-masing node client; isinya sesuai node, dengan `eiri` juga memasang `busybox-extras` untuk kebutuhan Telnet pada Soal 11.
 
 11. Eiri membuktikan kelemahan protokol Telnet dengan membuat akun `phantom_user` (password `wired_ghost`) pada layanan `telnetd` di node Chisa, lalu login Telnet dari node Eiri ke Chisa sambil menangkap sesi di Wireshark. Tunjukkan kredensial plain-text lewat *Follow TCP Stream*, dan jelaskan mengapa tiap karakter terkirim dalam paket TCP terpisah.
 
